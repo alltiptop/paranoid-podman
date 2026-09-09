@@ -1,0 +1,67 @@
+[build-system]
+requires = ["setuptools==80.9.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "paranoid-podman"
+dynamic = ["version"]
+description = "Defense-in-depth wrappers for rootless Podman, Compose, and DevPod"
+readme = "README.md"
+requires-python = ">=3.10"
+license = "MIT"
+license-files = ["LICENSE"]
+dependencies = ["PyYAML>=6.0,<7", "python-dotenv>=1.0,<2"]
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = false
+
+[tool.setuptools.dynamic]
+version = {file = "VERSION"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+include = ["paranoid_podman*"]
+namespaces = false
+
+[tool.setuptools.package-data]
+paranoid_podman = ["py.typed"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 88
+extend-include = ["bin/podman", "bin/compose-guard", "bin/devpod", "bin/paranoid-podman"]
+
+[tool.ruff.lint]
+select = ["B", "E4", "E7", "E9", "F", "I", "S", "UP"]
+
+[tool.ruff.lint.per-file-ignores]
+"src/paranoid_podman/compose/provider.py" = ["S603"]
+"src/paranoid_podman/devpod/cli.py" = ["S606"]
+"src/paranoid_podman/devpod/agent.py" = ["S603"]
+"src/paranoid_podman/devpod/keys.py" = ["S603"]
+"src/paranoid_podman/devpod/process.py" = ["S603"]
+"src/paranoid_podman/devpod/provider.py" = ["S603"]
+"src/paranoid_podman/devpod/session.py" = ["S603"]
+"src/paranoid_podman/podman/execution.py" = ["S603", "S606"]
+"src/paranoid_podman/lifecycle/providers.py" = ["S603"]
+"src/paranoid_podman/lifecycle/devpod.py" = ["S603"]
+"src/paranoid_podman/lifecycle/runtime.py" = ["S603"]
+"src/paranoid_podman/lifecycle/bootstrap.py" = ["S603"]
+"scripts/run_tests.py" = ["S603"]
+"scripts/build_wheel.py" = ["S603"]
+"scripts/smoke_wheel.py" = ["S603"]
+"scripts/validation.py" = ["S603"]
+"tests/**/*.py" = ["S101", "S108", "S603", "S607"]
+
+[tool.bandit]
+exclude_dirs = ["tests"]
+
+[tool.mypy]
+python_version = "3.10"
+files = ["src/paranoid_podman"]
+strict = true
+check_untyped_defs = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+warn_unused_configs = true

@@ -1,0 +1,25 @@
+# Private design notes
+tmp
+
+# Python-generated files
+__pycache__/
+*.py[cod]
+.coverage
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+.ruff_cache/
+build/
+dist/
+runtime-wheels/
+*.egg-info/
+
+# Local environments and editor files
+.venv/
+.venv-*/
+*.swp
+*~
+
+*.kate-swp
+.editorconfig
+.kateproject

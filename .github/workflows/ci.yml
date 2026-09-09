@@ -1,0 +1,194 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  tests:
+    name: Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+      - name: Install runtime dependency
+        run: python -m pip install --requirement requirements.txt
+      - name: Run fake-provider and lifecycle tests
+        run: scripts/test.sh
+      - name: Check built-in syntax
+        run: scripts/check.sh syntax
+      - name: Install reviewed Compose provider for scenario tests
+        run: python -m pip install 'podman-compose==1.6.0'
+      - name: Check daily Compose scenarios without running containers
+        run: |
+          export PODMAN_GUARD_COMPOSE_PROVIDER="$(command -v podman-compose)"
+          scripts/test.sh compose-provider
+
+  quality:
+    name: Static security and quality
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: |
+            requirements.txt
+            requirements-dev.txt
+      - name: Install validation tools
+        run: python -m pip install --requirement requirements.txt --requirement requirements-dev.txt
+      - name: Install pinned ShellCheck in runner temp
+        env:
+          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
+          SHELLCHECK_VERSION: v0.11.0
+        run: |
+          archive="$RUNNER_TEMP/shellcheck.tar.xz"
+          url="https://github.com/koalaman/shellcheck/releases/download/$SHELLCHECK_VERSION/shellcheck-$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl --fail --location --silent --show-error "$url" --output "$archive"
+          echo "$SHELLCHECK_SHA256  $archive" | sha256sum --check --strict
+          tar --extract --xz --file "$archive" --directory "$RUNNER_TEMP"
+          mkdir --parents "$RUNNER_TEMP/bin"
+          install --mode 0755 \
+            "$RUNNER_TEMP/shellcheck-$SHELLCHECK_VERSION/shellcheck" \
+            "$RUNNER_TEMP/bin/shellcheck"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Run local static checks
+        run: scripts/lint.sh
+
+  wheel:
+    name: Wheel / Python ${{ matrix.python-version }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.14"]
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Prepare separate build and installer environments
+        run: |
+          python -m venv "$RUNNER_TEMP/build-env"
+          "$RUNNER_TEMP/build-env/bin/python" -m pip install --only-binary=:all: --requirement requirements-build.txt
+          python -m venv "$RUNNER_TEMP/installer-env"
+          "$RUNNER_TEMP/installer-env/bin/python" -m pip install --only-binary=:all: --requirement requirements-installer.txt
+      - name: Build twice without validation tools or dependency installation
+        env:
+          SOURCE_DATE_EPOCH: "315532800"
+        run: |
+          export PATH="$RUNNER_TEMP/build-env/bin:$PATH"
+          scripts/build.sh --outdir "$RUNNER_TEMP/wheel-first"
+          scripts/build.sh --outdir "$RUNNER_TEMP/wheel-second"
+          for wheel in "$RUNNER_TEMP"/wheel-first/*.whl; do
+            cmp "$wheel" "$RUNNER_TEMP/wheel-second/$(basename "$wheel")"
+          done
+      - name: Prepare runtime wheels explicitly
+        run: |
+          mkdir "$RUNNER_TEMP/runtime-wheels"
+          "$RUNNER_TEMP/installer-env/bin/python" -m pip download --only-binary=:all: --requirement requirements.txt --constraint tests/runtime-constraints.txt --dest "$RUNNER_TEMP/runtime-wheels"
+          cp "$RUNNER_TEMP"/wheel-first/*.whl "$RUNNER_TEMP/runtime-wheels/"
+          python -B scripts/wheelhouse_lock.py "$RUNNER_TEMP/runtime-wheels"
+      - name: Install runtime without pip from hashed local wheels
+        env:
+          PIP_CONFIG_FILE: /dev/null
+          PIP_NO_INDEX: "1"
+        run: |
+          python -m venv --without-pip "$RUNNER_TEMP/runtime"
+          "$RUNNER_TEMP/installer-env/bin/python" -I -m pip --isolated --python "$RUNNER_TEMP/runtime/bin/python" install --no-index --no-cache-dir --find-links "$RUNNER_TEMP/runtime-wheels" --only-binary=:all: --require-hashes --no-compile --requirement "$RUNNER_TEMP/runtime-wheels/runtime.lock"
+      - name: Inspect artifact and isolated runtime without tooling imports
+        run: |
+          for wheel in "$RUNNER_TEMP"/wheel-first/*.whl; do
+            read -r digest _ < "$wheel.sha256"
+            python -B scripts/smoke_wheel.py --wheel "$wheel" --sha256 "$digest" --python "$RUNNER_TEMP/runtime/bin/python" --inventory "$RUNNER_TEMP/runtime-wheels/inventory.json"
+          done
+      - name: Test wheel lifecycle with fake providers
+        run: |
+          python -B -m tests.lifecycle.test_wheel --wheelhouse "$RUNNER_TEMP/runtime-wheels" --installer-python "$RUNNER_TEMP/installer-env/bin/python"
+      - name: Prepare wheels for automatic installation tests
+        run: |
+          "$RUNNER_TEMP/installer-env/bin/python" -m pip download --only-binary=:all: --requirement requirements-build.txt --requirement requirements-installer.txt --requirement requirements.txt --constraint tests/runtime-constraints.txt --dest "$RUNNER_TEMP/setup-wheels"
+      - name: Test plain install and update offline with fake providers
+        run: |
+          python -B -m tests.lifecycle.test_bootstrap --wheelhouse "$RUNNER_TEMP/setup-wheels"
+
+  secrets:
+    name: Publishable source secrets
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+      - name: Install pinned Gitleaks in runner temp
+        env:
+          # https://github.com/gitleaks/gitleaks/releases/tag/v8.30.1
+          GITLEAKS_SHA256: 551f6fc83ea457d62a0d98237cbad105af8d557003051f41f3e7ca7b3f2470eb
+          GITLEAKS_VERSION: 8.30.1
+        run: |
+          archive="$RUNNER_TEMP/gitleaks.tar.gz"
+          url="https://github.com/gitleaks/gitleaks/releases/download/v$GITLEAKS_VERSION/gitleaks_${GITLEAKS_VERSION}_linux_x64.tar.gz"
+          curl --fail --location --silent --show-error "$url" --output "$archive"
+          echo "$GITLEAKS_SHA256  $archive" | sha256sum --check --strict
+          mkdir --parents "$RUNNER_TEMP/gitleaks" "$RUNNER_TEMP/bin"
+          tar --extract --gzip --file "$archive" --directory "$RUNNER_TEMP/gitleaks" gitleaks
+          install --mode 0755 "$RUNNER_TEMP/gitleaks/gitleaks" "$RUNNER_TEMP/bin/gitleaks"
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+      - name: Scan source without Git history or private trees
+        run: scripts/audit.sh secrets
+
+  dependencies:
+    name: Network dependency audit
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out source
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Set up Python
+        uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.14"
+          cache: pip
+          cache-dependency-path: requirements-dev.txt
+      - name: Install validation tools in the audit environment
+        run: python -m pip install --requirement requirements-dev.txt
+      - name: Audit runtime and tooling requirements separately
+        run: scripts/audit.sh dependencies

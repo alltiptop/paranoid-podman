@@ -1,0 +1,11 @@
+#!/usr/bin/env bash
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+case "${1:-}" in
+  compose)
+    shift
+    exec "$SCRIPT_DIR/compose-guard" "$@"
+    ;;
+esac
+exec "$SCRIPT_DIR/podman" "$@"
