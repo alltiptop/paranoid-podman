@@ -123,7 +123,7 @@ SAFE_SECURITY_OPTIONS = {
 def validate_service(
     service: dict[str, Any],
     service_names: set[str],
-    declared_volumes: set[str],
+    declared_volumes: dict[str, dict[str, Any]],
     declared_networks: set[str],
     project_dir: Path,
 ) -> None:
@@ -344,7 +344,9 @@ def validate_and_rewrite(
             category=ViolationCategory.INPUT,
         )
     service_names = set(services)
-    declared_volumes, declared_networks = validate_named_resources(model)
+    declared_volumes, declared_networks = validate_named_resources(
+        model, invocation.project_dir
+    )
 
     for name in sorted(service_names):
         service = _mapping(

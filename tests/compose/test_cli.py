@@ -1299,6 +1299,89 @@ services:
         self.assertNotIn("/workspace/Dockerfile.dev", protected_targets)
         self.assertNotIn("/workspace/compose.yaml", protected_targets)
 
+    def test_named_local_bind_snapshot_uses_checked_host_path(self):
+        def prepare(project):
+            (project / "data" / "database").mkdir(parents=True)
+
+        def config(project):
+            return f"""services:
+  database:
+    image: example.invalid/database
+    volumes: ['database:/var/lib/postgresql/data']
+volumes:
+  database:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: {project}/data/database
+"""
+
+        result, records, source = self.run_guard(
+            ["up"], config, prepare_project=prepare
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, "")
+        snapshot = yaml.safe_load(records[-1]["snapshot"])
+        mount = snapshot["services"]["database"]["volumes"][0]
+        self.assertEqual(mount["type"], "bind")
+        self.assertEqual(mount["source"], str(source.parent / "data" / "database"))
+        self.assertNotIn("database", snapshot["volumes"])
+
+    def test_named_external_bind_still_requires_terminal_confirmation(self):
+        def config(project):
+            source = f"""services:
+  app:
+    image: example.invalid/image
+    volumes: ['shared:/shared:ro']
+volumes:
+  shared:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: {project.parent}/shared
+"""
+            (project / "compose.yaml").write_text(source, encoding="utf-8")
+            return source
+
+        for answer in (None, "n", "y"):
+            with self.subTest(answer=answer):
+                result, records, source = self.run_guard(
+                    ["up"],
+                    config,
+                    confirmation=answer,
+                    prepare_project=lambda project: (project.parent / "shared").mkdir(),
+                )
+                self.assertEqual(
+                    result.returncode, 0 if answer == "y" else 125, result.stderr
+                )
+                self.assertEqual(len(records), 2 if answer == "y" else 1)
+                self.assertIn(str(source.parent.parent / "shared"), result.stderr)
+                self.assertIn(f'"{source}":4', result.stderr)
+                self.assertIn("read-only", result.stderr)
+
+    def test_named_bind_denials_hide_values_and_do_not_execute_provider(self):
+        marker = "synthetic-driver-option-value"
+        config = f"""services:
+  app:
+    image: example.invalid/image
+    volumes: ['data:/data']
+volumes:
+  data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind,uid={marker}
+      device: /etc
+"""
+        result, records, _ = self.run_guard(["up"], config)
+        self.assertEqual(result.returncode, 125, result.stderr)
+        self.assertIn("BLOCKED [mount]", result.stderr)
+        self.assertNotIn(marker, result.stdout + result.stderr)
+        self.assertEqual(len(records), 1)
+        self.assertEqual(records[0]["argv"][-1], "config")
+
     def test_individual_external_bind_is_allowed_and_configs_stay_read_only(self):
         config = """services:
   app:

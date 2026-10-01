@@ -28,6 +28,67 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     "opt-in real Compose provider test (may query Podman)",
 )
 class InstalledComposeProviderCompatibilityTests(unittest.TestCase):
+    def test_named_bind_pwd_interpolation_with_recording_engine(self):
+        provider = Path(COMPOSE_PROVIDER).resolve()
+        if (
+            not provider.is_file()
+            or provider.parent == (PROJECT_ROOT / "bin").resolve()
+        ):
+            self.skipTest("the real Compose provider is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project with spaces"
+            data = project / "data" / "database"
+            data.mkdir(parents=True)
+            (project / "compose.yaml").write_text(
+                """services:
+  database:
+    image: example.invalid/database
+    volumes: ['database:/var/lib/postgresql/data']
+volumes:
+  database:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: "${PWD}/data/database"
+""",
+                encoding="utf-8",
+            )
+            log = root / "engine.jsonl"
+            environment = {
+                **os.environ,
+                "PWD": str(project),
+                "PODMAN_GUARD_REAL_PODMAN": str(
+                    PROJECT_ROOT / "tests/support/fake_compose_engine.py"
+                ),
+                "PODMAN_GUARD_COMPOSE_PROVIDER": str(provider),
+                "PODMAN_GUARD_INSTALLATION_ID": "a" * 64,
+                "PARANOID_COMPOSE_ENGINE_LOG": str(log),
+            }
+            result = subprocess.run(
+                [str(PROJECT_ROOT / "bin/compose-guard"), "up", "-d"],
+                cwd=project,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            create = next(call for call in calls if call[0] == "create")
+            self.assertTrue(
+                any(
+                    argument.startswith(f"{data}:/var/lib/postgresql/data")
+                    for argument in create
+                ),
+                create,
+            )
+            self.assertFalse(any(call[0] == "volume" for call in calls), calls)
+            self.assertEqual(list(data.iterdir()), [])
+
     def test_external_binds_require_review_after_real_provider_interpolation(self):
         provider = Path(COMPOSE_PROVIDER).resolve()
         if (

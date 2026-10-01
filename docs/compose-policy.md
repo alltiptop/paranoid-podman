@@ -191,6 +191,22 @@ secrets. Devcontainer contents are not inspected.
 
 ## Mounts and protected files
 
+Named declarations with `driver: local` (or the default driver) support
+`driver_opts: {type: none, o: bind, device: /absolute/existing/directory}`.
+The `o` value also accepts `bind,ro` and `bind,rw` (in either order).
+Compose interpolation such as `${PWD}/data/database` must produce an absolute
+path to an existing directory.
+
+These declarations act as reusable bind sources: the adapter replaces service
+references with direct binds in its private snapshot and removes those named
+volume declarations. It does not create, reuse, or delete an engine volume for
+them, and does not copy image contents into the host directory. Existing engine
+volumes with the same names remain untouched. Explicit `volume.nocopy: false`
+is rejected; `true` is accepted. Ordinary named volumes without `driver_opts`
+keep their existing behavior. Other driver options and custom drivers are denied.
+The bind checks, read-only protection, and external-path confirmation below
+apply to these sources too; `o: bind,ro` cannot be made writable by a service.
+
 A bind source must already exist as a regular non-symlink file or directory.
 Individual ordinary paths may be outside the project. The following are denied:
 

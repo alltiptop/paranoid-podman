@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import re
+from pathlib import Path
 from typing import Any
 
 from paranoid_podman.common.environment import is_sensitive_env_key
@@ -11,6 +12,7 @@ from paranoid_podman.common.errors import ViolationCategory
 from paranoid_podman.common.ports import is_ip_address, is_published_port, port_range
 from paranoid_podman.common.provenance import is_guard_reserved_label
 from paranoid_podman.compose.errors import reject
+from paranoid_podman.compose.mounts import named_bind_options
 from paranoid_podman.compose.schema import _mapping, _string_list, _valid_name
 
 RESERVED_NETWORK_NAMES = {
@@ -106,7 +108,9 @@ def validate_ulimits(value: Any) -> None:
             )
 
 
-def validate_named_resources(model: dict[str, Any]) -> tuple[set[str], set[str]]:
+def validate_named_resources(
+    model: dict[str, Any], project_dir: Path
+) -> tuple[dict[str, dict[str, Any]], set[str]]:
     volumes = _mapping(
         model.get("volumes", {}),
         "malformed named volumes",
@@ -118,7 +122,8 @@ def validate_named_resources(model: dict[str, Any]) -> tuple[set[str], set[str]]
         category=ViolationCategory.NETWORK,
     )
 
-    for name, definition in volumes.items():
+    declared_volumes: dict[str, dict[str, Any]] = {}
+    for name, definition in list(volumes.items()):
         if not _valid_name(name):
             reject(
                 "blocked resolved configuration: invalid named volume",
@@ -130,7 +135,7 @@ def validate_named_resources(model: dict[str, Any]) -> tuple[set[str], set[str]]
         definition = _mapping(
             definition, "malformed named volume", category=ViolationCategory.MOUNT
         )
-        if set(definition) - {"driver", "external"}:
+        if set(definition) - {"driver", "driver_opts", "external"}:
             reject(
                 "blocked resolved configuration: unreviewed named volume settings",
                 category=ViolationCategory.MOUNT,
@@ -145,7 +150,16 @@ def validate_named_resources(model: dict[str, Any]) -> tuple[set[str], set[str]]
                 "blocked resolved configuration: custom volume driver",
                 category=ViolationCategory.MOUNT,
             )
-        volumes[name] = {}
+        if "driver_opts" in definition:
+            declared_volumes[name] = named_bind_options(
+                definition["driver_opts"], project_dir
+            )
+            # Service references become direct binds. Do not create or reuse an
+            # engine volume whose stored device/options may differ from this file.
+            del volumes[name]
+        else:
+            declared_volumes[name] = {}
+            volumes[name] = {}
 
     for name, definition in networks.items():
         if not _valid_name(name):
@@ -200,7 +214,7 @@ def validate_named_resources(model: dict[str, Any]) -> tuple[set[str], set[str]]
                 )
         definition.pop("external", None)
 
-    return set(volumes), set(networks)
+    return declared_volumes, set(networks)
 
 
 def validate_ports(value: Any) -> list[Any]:

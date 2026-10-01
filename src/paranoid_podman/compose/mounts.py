@@ -72,6 +72,45 @@ def resolve_bind_source(source: Any, project_dir: Path) -> Path:
     return resolved
 
 
+def named_bind_options(value: Any, project_dir: Path) -> dict[str, Any]:
+    """Treat a local-driver bind as a checked host path, not an opaque volume."""
+
+    options = _mapping(
+        value, "malformed volume driver options", category=ViolationCategory.MOUNT
+    )
+    if set(options) != {"type", "o", "device"} or options.get("type") != "none":
+        reject(
+            "blocked resolved configuration: only local bind volume driver options "
+            "(type: none, o: bind, device: absolute directory) are supported",
+            category=ViolationCategory.MOUNT,
+        )
+    mode = options["o"]
+    if not isinstance(mode, str) or mode not in {
+        "bind",
+        "bind,ro",
+        "ro,bind",
+        "bind,rw",
+        "rw,bind",
+    }:
+        reject(
+            "blocked resolved configuration: unsupported local bind volume options",
+            category=ViolationCategory.MOUNT,
+        )
+    device = options["device"]
+    if not isinstance(device, str) or not Path(device).is_absolute():
+        reject(
+            "blocked resolved configuration: local bind volume device must be absolute",
+            category=ViolationCategory.MOUNT,
+        )
+    source = resolve_bind_source(device, project_dir)
+    if not source.is_dir():
+        reject(
+            "blocked resolved configuration: local bind volume device must be a directory",
+            category=ViolationCategory.MOUNT,
+        )
+    return {"type": "bind", "source": str(source), "read_only": "ro" in mode.split(",")}
+
+
 def parse_short_volume(specification: str) -> dict[str, Any]:
     parts = specification.split(":")
     if len(parts) == 1:
@@ -198,7 +237,7 @@ def protected_children(
 def normalize_volume(
     volume: Any,
     project_dir: Path,
-    declared_volumes: set[str],
+    declared_volumes: dict[str, dict[str, Any]],
 ) -> tuple[dict[str, Any], list[dict[str, Any]], set[str]]:
     if isinstance(volume, str):
         normalized = parse_short_volume(volume)
@@ -312,6 +351,24 @@ def normalize_volume(
                 "blocked resolved configuration: undeclared named volume",
                 category=ViolationCategory.MOUNT,
             )
+        if volume_source is not None and declared_volumes[volume_source]:
+            if volume_options.get("nocopy") is False:
+                reject(
+                    "blocked resolved configuration: image copy into a local bind "
+                    "volume is unsupported; use volume.nocopy: true",
+                    category=ViolationCategory.MOUNT,
+                )
+            bind = declared_volumes[volume_source]
+            return normalize_volume(
+                {
+                    **bind,
+                    "target": target,
+                    "read_only": read_only or bind["read_only"],
+                    "bind": normalized.get("bind", {}),
+                },
+                project_dir,
+                declared_volumes,
+            )
         result = {"type": "volume", "target": target, "read_only": read_only}
         if volume_source is not None:
             result["source"] = volume_source
@@ -345,7 +402,9 @@ def normalize_volume(
 
 
 def validate_service_volumes(
-    service: dict[str, Any], project_dir: Path, declared_volumes: set[str]
+    service: dict[str, Any],
+    project_dir: Path,
+    declared_volumes: dict[str, dict[str, Any]],
 ) -> None:
     volumes = service.get("volumes", [])
     if not isinstance(volumes, list):
