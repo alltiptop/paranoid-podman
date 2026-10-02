@@ -28,6 +28,75 @@ PROJECT_ROOT = Path(__file__).resolve().parents[2]
     "opt-in real Compose provider test (may query Podman)",
 )
 class InstalledComposeProviderCompatibilityTests(unittest.TestCase):
+    def test_loopback_mode_preserves_the_selected_port_without_extra_networks(self):
+        provider = Path(COMPOSE_PROVIDER).resolve()
+        if (
+            not provider.is_file()
+            or provider.parent == (PROJECT_ROOT / "bin").resolve()
+        ):
+            self.skipTest("the real Compose provider is unavailable")
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            project = root / "project"
+            project.mkdir()
+            network = "pasta:-T,49152"
+            (project / "compose.yaml").write_text(
+                yaml.safe_dump(
+                    {
+                        "services": {
+                            "app": {
+                                "image": "example.invalid/app",
+                                "user": "pwuser",
+                                "security_opt": ["seccomp=chromium"],
+                                "network_mode": network,
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            log = root / "engine.jsonl"
+            environment = {
+                **os.environ,
+                "PODMAN_GUARD_REAL_PODMAN": str(
+                    PROJECT_ROOT / "tests/support/fake_compose_engine.py"
+                ),
+                "PODMAN_GUARD_COMPOSE_PROVIDER": str(provider),
+                "PODMAN_GUARD_INSTALLATION_ID": "a" * 64,
+                "PARANOID_COMPOSE_ENGINE_LOG": str(log),
+            }
+            result = subprocess.run(
+                [str(PROJECT_ROOT / "bin/compose-guard"), "up", "-d"],
+                cwd=project,
+                env=environment,
+                stdin=subprocess.DEVNULL,
+                capture_output=True,
+                text=True,
+                check=False,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            calls = [json.loads(line) for line in log.read_text().splitlines()]
+            create = next(call for call in calls if call[0] == "create")
+            networks = [
+                argument.split("=", 1)[1]
+                for argument in create
+                if argument.startswith("--network=")
+            ]
+            self.assertEqual(networks, [network], create)
+            self.assertFalse(any(call[0] == "network" for call in calls), calls)
+            security_options = [
+                create[index + 1]
+                for index, argument in enumerate(create[:-1])
+                if argument == "--security-opt"
+            ]
+            self.assertIn("no-new-privileges", security_options)
+            self.assertIn(
+                f"seccomp={PROJECT_ROOT}/src/paranoid_podman/profiles/chromium.json",
+                security_options,
+            )
+            self.assertEqual(create[create.index("--cap-drop") + 1], "ALL")
+
     def test_named_bind_pwd_interpolation_with_recording_engine(self):
         provider = Path(COMPOSE_PROVIDER).resolve()
         if (

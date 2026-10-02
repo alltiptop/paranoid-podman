@@ -121,8 +121,8 @@ source but are removed from the execution snapshot.
 | --- | --- | --- |
 | Services | conventional images and project-local builds, including `build` without `image` | malformed or unknown service fields |
 | Privilege | non-privileged containers, capability drops | privileged mode, capability additions, devices, GPUs, custom runtimes |
-| Security | `no-new-privileges` | other security options, sysctls, custom cgroups |
-| Namespaces | bridge or no network; `auto`, `keep-id` including UID/GID/size options, or private user namespace | host/joined PID, IPC, UTS, or network namespaces |
+| Security | `no-new-privileges`, opt-in `seccomp=chromium` with an explicit non-root user | arbitrary seccomp files, other security options, sysctls, custom cgroups |
+| Namespaces | bridge, no network, or opt-in `network_mode: pasta:-T,PORT`; `auto`, `keep-id` including UID/GID/size options, or private user namespace | host/joined PID, IPC, UTS, or network namespaces |
 | Resources | CPU/memory limits, `shm_size`, bounded `nofile`/`nproc` ulimits; PID limit 1-32768, default 512; scale 0-10 | deploy rules and unreviewed resource controls |
 | Ports | normal TCP/UDP bindings, including wildcard, LAN, IPv6, ranges, and automatic host ports | malformed addresses or port numbers |
 | Volumes | anonymous or declared project-local volumes | external resources, custom drivers, inherited volumes |
@@ -135,10 +135,18 @@ Compose secrets/configs, engine sockets, links, arbitrary host mappings,
 `volumes_from`, credential specifications, automatic host synchronization,
 provider-specific `x-podman*` extensions, and unknown settings are denied.
 
-The adapter always writes `security_opt: [no-new-privileges]`. It adds
-`pids_limit: 512` when absent and preserves an explicit value through 32768.
+The adapter always includes `no-new-privileges` in `security_opt`. The opt-in
+`seccomp=chromium` selector is replaced with the absolute path of the verified
+bundled profile and forces `cap_drop: [ALL]`; it requires an explicit non-root
+`user`. See [Chromium sandbox compatibility](chromium-sandbox.md).
+The adapter adds `pids_limit: 512` when absent and preserves an explicit value
+through 32768.
 Capability drops, restart policy, pull policy, rootless user namespace, and
 ordinary proxy behavior are otherwise preserved.
+
+The optional `network_mode: pasta:-T,PORT` accepts one explicit host-loopback
+TCP port from 1 through 65535. It cannot coexist with service-level `networks`,
+including an empty list. See [Host loopback access](host-loopback.md).
 
 `extra_hosts` accepts `host.docker.internal:host-gateway` and
 `host.containers.internal:host-gateway`, in list or mapping form.

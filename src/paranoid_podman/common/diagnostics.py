@@ -45,8 +45,10 @@ GUIDANCE = {
         "`host.containers.internal:host-gateway` for local development"
     ),
     ViolationCategory.NETWORK: (
-        "use an isolated bridge, none, pasta, or slirp4netns network; host, "
-        "joined, external, and custom networks are outside this policy"
+        "use an isolated bridge, none, pasta, or slirp4netns network; "
+        "for one explicit host-loopback TCP port use "
+        "pasta:-T,PORT; host, joined, external, and other custom "
+        "networks are outside this policy"
     ),
     ViolationCategory.MOUNT: (
         "mount only the specific project-owned path that is needed and remove "

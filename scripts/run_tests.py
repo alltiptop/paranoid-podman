@@ -9,6 +9,14 @@ from pathlib import Path
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 INTEGRATIONS = {
+    "loopback": (
+        "PARANOID_PODMAN_RUN_LOOPBACK_TESTS",
+        "tests.podman.test_loopback",
+    ),
+    "chromium": (
+        "PARANOID_PODMAN_RUN_CHROMIUM_TESTS",
+        "tests.podman.test_chromium",
+    ),
     "compose-provider": (
         "PARANOID_PODMAN_RUN_COMPOSE_PROVIDER_TESTS",
         "tests.compose.test_provider",

@@ -206,6 +206,11 @@ class PackageLayoutTests(unittest.TestCase):
                 (source / name).write_text("synthetic input\n", encoding="utf-8")
             (package / "__init__.py").write_text("", encoding="utf-8")
             (package / "py.typed").touch()
+            profiles = package / "profiles"
+            profiles.mkdir()
+            (profiles / "chromium.json").write_text("{}\n")
+            (profiles / "LICENSE-APACHE").write_text("synthetic license\n")
+            (profiles / "unreviewed.json").write_text("{}\n")
             hidden = package / ".private"
             hidden.mkdir()
             (hidden / "config.py").write_text("private = True\n", encoding="utf-8")
@@ -218,6 +223,13 @@ class PackageLayoutTests(unittest.TestCase):
             copy_build_source(source, staging)
             self.assertTrue((staging / "src/paranoid_podman/__init__.py").is_file())
             self.assertTrue((staging / "src/paranoid_podman/py.typed").is_file())
+            for name in ("chromium.json", "LICENSE-APACHE"):
+                self.assertTrue(
+                    (staging / "src/paranoid_podman/profiles" / name).is_file()
+                )
+            self.assertFalse(
+                (staging / "src/paranoid_podman/profiles/unreviewed.json").exists()
+            )
             self.assertFalse((staging / "src/paranoid_podman/private.txt").exists())
             self.assertFalse((staging / "src/paranoid_podman/.private").exists())
             self.assertFalse((staging / "requirements-dev.txt").exists())

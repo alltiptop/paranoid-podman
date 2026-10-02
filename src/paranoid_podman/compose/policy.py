@@ -10,11 +10,17 @@ from paranoid_podman.common.build_inputs import is_safe_image_reference
 from paranoid_podman.common.errors import ViolationCategory
 from paranoid_podman.common.hostnames import DEVPOD_ID_LABEL, workspace_hostname
 from paranoid_podman.common.namespaces import is_keep_id
+from paranoid_podman.common.networks import loopback_tcp_port
 from paranoid_podman.common.provenance import (
     GUARD_INSTALLATION_ID,
     GUARD_INSTALLATION_LABEL,
     GUARD_POLICY_LABEL,
     GUARD_POLICY_VERSION,
+)
+from paranoid_podman.common.seccomp import (
+    CHROMIUM_SECURITY_OPTION,
+    chromium_security_option,
+    is_explicit_nonroot_user,
 )
 from paranoid_podman.compose.build import validate_build
 from paranoid_podman.compose.dotenv import validate_service_env_files
@@ -173,9 +179,16 @@ def validate_service(
             "blocked resolved configuration: privileged container",
             category=ViolationCategory.PRIVILEGE,
         )
-    if service.get("network_mode") not in (None, "bridge", "none"):
+    network_mode = service.get("network_mode")
+    loopback_forward = loopback_tcp_port(network_mode) is not None
+    if network_mode not in (None, "bridge", "none") and not loopback_forward:
         reject(
             "blocked resolved configuration: host or joined network namespace",
+            category=ViolationCategory.NETWORK,
+        )
+    if loopback_forward and "networks" in service:
+        reject(
+            "loopback TCP forwarding cannot be combined with service networks",
             category=ViolationCategory.NETWORK,
         )
     if service.get("cap_add") not in (None, [], ()):
@@ -212,12 +225,30 @@ def validate_service(
         "malformed security options",
         category=ViolationCategory.PRIVILEGE,
     )
-    if any(option not in SAFE_SECURITY_OPTIONS for option in security_options):
+    if any(
+        option not in SAFE_SECURITY_OPTIONS | {CHROMIUM_SECURITY_OPTION}
+        for option in security_options
+    ):
         reject(
             "blocked resolved configuration: custom security options",
             category=ViolationCategory.PRIVILEGE,
         )
     service["security_opt"] = ["no-new-privileges"]
+    if CHROMIUM_SECURITY_OPTION in security_options:
+        if security_options.count(CHROMIUM_SECURITY_OPTION) != 1:
+            reject(
+                "duplicate Chromium seccomp profile", category=ViolationCategory.INPUT
+            )
+        if not is_explicit_nonroot_user(service.get("user")):
+            reject(
+                "Chromium seccomp profile requires an explicit non-root user",
+                category=ViolationCategory.PRIVILEGE,
+            )
+        try:
+            service["security_opt"].append(chromium_security_option())
+        except ValueError as error:
+            reject(str(error), category=ViolationCategory.INSTALLATION)
+        service["cap_drop"] = ["ALL"]
 
     pids_limit = service.get("pids_limit", DEFAULT_PIDS)
     if isinstance(pids_limit, bool) or not isinstance(pids_limit, int):

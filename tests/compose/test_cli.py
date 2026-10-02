@@ -28,6 +28,106 @@ SAFE_CONFIG = """services:
 
 
 class ComposeGuardIntegrationTests(unittest.TestCase):
+    def test_loopback_network_mode_is_preserved_in_reviewed_snapshot(self):
+        network = "pasta:-T,49152"
+        config = yaml.safe_dump(
+            {
+                "services": {
+                    "browser": {
+                        "image": "example.invalid/image",
+                        "user": "pwuser",
+                        "security_opt": ["seccomp=chromium"],
+                        "network_mode": network,
+                    }
+                }
+            }
+        )
+        result, records, _ = self.run_guard(["up"], config)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        service = yaml.safe_load(records[-1]["snapshot"])["services"]["browser"]
+        self.assertEqual(service["network_mode"], network)
+        self.assertEqual(service["cap_drop"], ["ALL"])
+        self.assertIn("no-new-privileges", service["security_opt"])
+
+    def test_loopback_mode_cannot_add_networks_or_expand_forwarding(self):
+        for extra in (
+            {"networks": ["default"]},
+            {"networks": []},
+            {"network_mode": "pasta:-T,all"},
+            {"network_mode": "pasta:-T,49152,--map-gw"},
+            {"network_mode": "pasta:-T,0.0.0.0/49152"},
+        ):
+            with self.subTest(extra=extra):
+                config = yaml.safe_dump(
+                    {
+                        "services": {
+                            "app": {
+                                "image": "example.invalid/image",
+                                "network_mode": "pasta:-T,49152",
+                                **extra,
+                            }
+                        },
+                        "networks": {"default": {}},
+                    }
+                )
+                result, records, _ = self.run_guard(["up"], config)
+                self.assertEqual(result.returncode, 125, result.stderr)
+                self.assertEqual(len(records), 1)
+
+    def test_chromium_profile_is_pinned_in_snapshot_with_full_hardening(self):
+        for user in ("pwuser", "1000:1000", 1000):
+            config = yaml.safe_dump(
+                {
+                    "services": {
+                        "browser": {
+                            "image": "example.invalid/image",
+                            "user": user,
+                            "security_opt": ["seccomp=chromium"],
+                            "cap_drop": ["NET_RAW"],
+                        }
+                    }
+                }
+            )
+            result, records, _ = self.run_guard(["up"], config)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            service = yaml.safe_load(records[-1]["snapshot"])["services"]["browser"]
+            self.assertEqual(service["cap_drop"], ["ALL"])
+            self.assertEqual(
+                service["security_opt"],
+                [
+                    "no-new-privileges",
+                    f"seccomp={PROJECT_ROOT}/src/paranoid_podman/profiles/chromium.json",
+                ],
+            )
+
+    def test_chromium_profile_rejects_unsafe_identity_and_security_options(self):
+        cases = (
+            [{"user": user} for user in (None, "root", "1000:0", 0, True)]
+            + [
+                {"security_opt": ["seccomp=chromium", other]}
+                for other in (
+                    "seccomp=chromium",
+                    "seccomp=unconfined",
+                    "seccomp=./profile.json",
+                    "no-new-privileges:false",
+                )
+            ]
+            + [{"cap_add": ["SYS_CHROOT"]}]
+        )
+        for extra in cases:
+            with self.subTest(extra=extra):
+                service = {
+                    "image": "example.invalid/image",
+                    "user": "pwuser",
+                    "security_opt": ["seccomp=chromium"],
+                    **extra,
+                }
+                result, records, _ = self.run_guard(
+                    ["up"], yaml.safe_dump({"services": {"browser": service}})
+                )
+                self.assertEqual(result.returncode, 125, result.stderr)
+                self.assertEqual(len(records), 1, "rejected request reached execution")
+
     def run_guard(
         self,
         arguments,

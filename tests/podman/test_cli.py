@@ -46,6 +46,174 @@ PROVIDER_CONTROL_ENV_KEYS = (
 
 
 class PodmanGuardIntegrationTests(unittest.TestCase):
+    def test_explicit_loopback_forward_preserves_security_and_port(self):
+        for port in (1, 8080, 49152, 65535):
+            for command in (["run"], ["container", "create"]):
+                for option in ("--network", "--net"):
+                    with self.subTest(port=port, command=command, option=option):
+                        network = f"pasta:-T,{port}"
+                        result, args = self.run_guard(
+                            [
+                                *command,
+                                f"{option}={network}",
+                                "--user=pwuser",
+                                "--security-opt=seccomp=chromium",
+                                "example.invalid/image",
+                            ]
+                        )
+                        self.assertEqual(result.returncode, 0, result.stderr)
+                        self.assertIn(f"{option}={network}", args)
+                        self.assertIn("--cap-drop=ALL", args)
+                        self.assertIn("--security-opt=no-new-privileges", args)
+
+    def test_loopback_network_options_cannot_be_combined_or_expanded(self):
+        for extra in (
+            ["--net=pasta"],
+            ["--network=none"],
+            ["--network=pasta:-T,5000"],
+        ):
+            self.assert_denied(
+                [
+                    "run",
+                    "--network",
+                    "pasta:-T,4000",
+                    *extra,
+                    "example.invalid/image",
+                ]
+            )
+        for network in (
+            "pasta:-T,all",
+            "pasta:-T,auto",
+            "pasta:-T,1-65535",
+            "pasta:-T,4000,--map-gw",
+            "pasta:--map-gw",
+            "pasta:-T,0.0.0.0/4000",
+            "slirp4netns:allow_host_loopback=true",
+        ):
+            with self.subTest(network=network):
+                self.assert_denied(
+                    ["run", "--network", network, "example.invalid/image"]
+                )
+
+    def test_network_text_in_other_options_or_container_command_is_untouched(self):
+        result, args = self.run_guard(
+            [
+                "run",
+                "--network",
+                "pasta:-T,4000",
+                "--env",
+                "MODE=--network=host",
+                "example.invalid/image",
+                "--network",
+                "pasta:-T,5000",
+            ]
+        )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(args[-2:], ["--network", "pasta:-T,5000"])
+        self.assertIn("MODE=--network=host", args)
+
+    def test_chromium_profile_preserves_mandatory_hardening(self):
+        profile = PROJECT_ROOT / "src/paranoid_podman/profiles/chromium.json"
+        for command in (
+            ["run"],
+            ["create"],
+            ["container", "run"],
+            ["container", "create"],
+        ):
+            for security in (
+                ["--security-opt", "seccomp=chromium"],
+                ["--security-opt=seccomp=chromium"],
+            ):
+                with self.subTest(command=command, security=security):
+                    result, args = self.run_guard(
+                        [
+                            *command,
+                            "--user",
+                            "pwuser",
+                            *security,
+                            "--http-proxy=false",
+                            "--privileged=false",
+                            "example.invalid/image",
+                            "--security-opt=seccomp=unconfined",
+                        ]
+                    )
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertIn("--cap-drop=ALL", args)
+                    self.assertIn("--security-opt=no-new-privileges", args)
+                    self.assertIn("--http-proxy=false", args)
+                    self.assertIn("--privileged=false", args)
+                    self.assertTrue(
+                        f"seccomp={profile}" in args
+                        or f"--security-opt=seccomp={profile}" in args
+                    )
+                    self.assertEqual(args[-1], "--security-opt=seccomp=unconfined")
+
+    def test_chromium_profile_cannot_relax_other_security_rules(self):
+        for extra in (
+            [],
+            ["--user", "root"],
+            ["--user", "1000:0"],
+            ["--user", "pwuser", "--cap-add=SYS_CHROOT"],
+            ["--user", "pwuser", "--security-opt=no-new-privileges=false"],
+            ["--user", "pwuser", "--security-opt=seccomp=unconfined"],
+            ["--user", "pwuser", "--security-opt=seccomp=chromium"],
+            ["--user", "pwuser", "--privileged"],
+            ["--user", "pwuser", "--ipc=host"],
+        ):
+            with self.subTest(extra=extra):
+                self.assert_denied(
+                    [
+                        "run",
+                        "--security-opt=seccomp=chromium",
+                        *extra,
+                        "example.invalid/image",
+                    ]
+                )
+
+    def test_chromium_selector_does_not_read_cwd_or_rewrite_other_values(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            (Path(temporary) / "chromium").write_text(
+                '{"defaultAction":"SCMP_ACT_ALLOW"}'
+            )
+            for selector in (
+                "seccomp=./chromium",
+                "seccomp=chromium.json",
+                f"seccomp={temporary}/chromium",
+            ):
+                self.assert_denied(
+                    [
+                        "run",
+                        "--user",
+                        "pwuser",
+                        "--security-opt",
+                        selector,
+                        "example.invalid/image",
+                    ],
+                    cwd=temporary,
+                )
+            result, args = self.run_guard(
+                [
+                    "run",
+                    "--user=pwuser",
+                    "--security-opt=seccomp=chromium",
+                    "--security-opt",
+                    "no-new-privileges=true",
+                    "--entrypoint",
+                    "--security-opt=seccomp=chromium",
+                    "-e",
+                    "PROFILE=seccomp=chromium",
+                    "example.invalid/image",
+                ],
+                cwd=temporary,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("--cap-drop=ALL", args)
+            self.assertEqual(
+                args[args.index("--entrypoint") + 1], "--security-opt=seccomp=chromium"
+            )
+            self.assertIn("PROFILE=seccomp=chromium", args)
+            self.assertIn("no-new-privileges=true", args)
+
     def run_guard(
         self,
         arguments,

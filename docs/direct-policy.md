@@ -75,11 +75,11 @@ set either label or reserved Compose-management labels.
 | --- | --- |
 | Privilege | `--privileged` may only be explicitly false; capability additions and devices are not supported |
 | Capabilities | only `--cap-drop=ALL` is accepted |
-| Security options | only `no-new-privileges` is accepted |
+| Security options | `no-new-privileges`; opt-in `seccomp=chromium` with an explicit non-root user; other profiles/options are denied |
 | Container user | explicit non-root users are accepted; explicit root users or groups are denied |
 | User namespace | `keep-id`, including validated `uid`, `gid`, and `size` options |
 | PID, IPC, UTS, and cgroup namespaces | only private namespaces are accepted |
-| Network | `bridge`, `none`, `pasta`, or `slirp4netns`, without custom options |
+| Network | `bridge`, `none`, `pasta`, or `slirp4netns`; opt-in `pasta:-T,PORT` for one explicit host-loopback TCP port |
 | Host mapping | `host.docker.internal:host-gateway` and `host.containers.internal:host-gateway` |
 | Published ports | TCP/UDP mappings, IPv4/IPv6 addresses, port ranges, automatic host ports, and `-P`/`--publish-all`; addresses are preserved |
 | Environment | explicit `NAME=value`; implicit host inheritance is denied |
@@ -114,6 +114,17 @@ Unless an accepted value is already present, creation adds:
 An explicit non-root container user suppresses the compatibility-sensitive
 `keep-id` and automatic capability-drop defaults. It does not disable
 `no-new-privileges` or the remaining mandatory defaults.
+
+The opt-in `--security-opt seccomp=chromium` profile always retains
+`--cap-drop=ALL`, including when `--user` is present. It also retains
+`no-new-privileges` when the profile is the only supplied security option.
+See [Chromium sandbox compatibility](chromium-sandbox.md) for the reviewed
+syscall change, usage, and limitations.
+
+The optional `--network=pasta:-T,PORT` accepts any single decimal TCP port from
+1 through 65535, independently of the image or project. It cannot be combined
+with another `--network` or `--net` option. See
+[Host loopback access](host-loopback.md) for its scope and verification.
 
 ## Bind mounts
 

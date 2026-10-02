@@ -28,7 +28,12 @@ def copy_build_source(root: Path, destination: Path) -> None:
             continue
         if path.is_symlink():
             raise ValueError("package sources cannot contain symlinks")
-        if path.suffix == ".py" or path.name == "py.typed":
+        if (
+            path.suffix == ".py"
+            or path.name == "py.typed"
+            or path.relative_to(source).as_posix()
+            in {"profiles/chromium.json", "profiles/LICENSE-APACHE"}
+        ):
             paths.append(path)
     for path in paths:
         if path.is_symlink() or not path.is_file():

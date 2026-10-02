@@ -7,11 +7,17 @@ from paranoid_podman.common.environment import SENSITIVE_ENV_KEYS
 from paranoid_podman.common.errors import ViolationCategory
 from paranoid_podman.common.hostnames import DEVPOD_ID_LABEL, workspace_hostname
 from paranoid_podman.common.namespaces import is_keep_id
+from paranoid_podman.common.networks import loopback_tcp_port
 from paranoid_podman.common.provenance import (
     GUARD_INSTALLATION_ID,
     GUARD_INSTALLATION_LABEL,
     GUARD_POLICY_LABEL,
     GUARD_POLICY_VERSION,
+)
+from paranoid_podman.common.seccomp import (
+    CHROMIUM_SECURITY_OPTION,
+    chromium_security_option,
+    is_explicit_nonroot_user,
 )
 from paranoid_podman.podman.arguments import (
     FALSE_ONLY_OPTIONS,
@@ -79,9 +85,13 @@ def check_runtime_arg(flag: str, value: str | None, project_dir: Path) -> Checke
         )
     elif flag == "--expose":
         validate_exposed_port(value)
-    elif flag in {"--network", "--net"} and value not in SAFE_NETWORKS:
+    elif (
+        flag in {"--network", "--net"}
+        and value not in SAFE_NETWORKS
+        and loopback_tcp_port(value) is None
+    ):
         reject(
-            "blocked host, joined, custom, or configured network",
+            "blocked host, joined, custom, or unreviewed network options",
             category=ViolationCategory.NETWORK,
         )
     elif flag in PRIVATE_NAMESPACE_OPTIONS and value != "private":
@@ -98,7 +108,9 @@ def check_runtime_arg(flag: str, value: str | None, project_dir: Path) -> Checke
             "blocked partial capability drop; use --cap-drop=ALL",
             category=ViolationCategory.PRIVILEGE,
         )
-    elif flag == "--security-opt" and value not in SAFE_SECURITY_OPTIONS:
+    elif flag == "--security-opt" and value not in (
+        SAFE_SECURITY_OPTIONS | {CHROMIUM_SECURITY_OPTION}
+    ):
         reject(
             "blocked unreviewed security option", category=ViolationCategory.PRIVILEGE
         )
@@ -156,6 +168,10 @@ def check_runtime_arg(flag: str, value: str | None, project_dir: Path) -> Checke
 
 
 def safe_args_for(runtime: list[str]) -> list[str]:
+    chromium = any(
+        option == "--security-opt" and value == CHROMIUM_SECURITY_OPTION
+        for option, value in runtime_options(runtime)
+    )
     safe = [
         f"--label={GUARD_POLICY_LABEL}={GUARD_POLICY_VERSION}",
         f"--label={GUARD_INSTALLATION_LABEL}={GUARD_INSTALLATION_ID}",
@@ -189,12 +205,15 @@ def safe_args_for(runtime: list[str]) -> list[str]:
     # or later podman exec --user operations. For non-root runtime users, cap-drop is mostly
     # redundant anyway because the process has no effective root capabilities.
     if not has_arg(runtime, {"--cap-drop"}):
-        if FORCE_CAP_DROP == "1":
+        if chromium or FORCE_CAP_DROP == "1":
             safe.append("--cap-drop=ALL")
         elif FORCE_CAP_DROP == "auto" and not has_user:
             safe.append("--cap-drop=ALL")
 
-    if not has_arg(runtime, {"--security-opt"}):
+    if not any(
+        option == "--security-opt" and value in SAFE_SECURITY_OPTIONS
+        for option, value in runtime_options(runtime)
+    ):
         safe.append("--security-opt=no-new-privileges")
 
     if not has_arg(runtime, {"--pids-limit"}):
@@ -209,6 +228,62 @@ def safe_args_for(runtime: list[str]) -> list[str]:
     for key in sorted(SENSITIVE_ENV_KEYS):
         safe.append(f"--unsetenv={key}")
     return safe
+
+
+def resolve_security_options(runtime: list[str]) -> list[str]:
+    """Expand the named profile only after validating the entire request."""
+    options = list(runtime_options(runtime))
+    profiles = [
+        value
+        for option, value in options
+        if option == "--security-opt" and value == CHROMIUM_SECURITY_OPTION
+    ]
+    if not profiles:
+        return runtime
+    if len(profiles) != 1:
+        reject("duplicate Chromium seccomp profile", category=ViolationCategory.INPUT)
+    users = [value for option, value in options if option in {"--user", "-u"}]
+    if not users or not is_explicit_nonroot_user(users[-1]):
+        reject(
+            "Chromium seccomp profile requires an explicit non-root --user",
+            category=ViolationCategory.PRIVILEGE,
+        )
+    try:
+        resolved = chromium_security_option()
+    except ValueError as error:
+        reject(str(error), category=ViolationCategory.INSTALLATION)
+    # Keep the original flag forms and skip values belonging to other options.
+    result = runtime.copy()
+    index = 0
+    while index < len(runtime):
+        argument = runtime[index]
+        if argument in VALUE_OPTIONS:
+            if (
+                argument == "--security-opt"
+                and runtime[index + 1] == CHROMIUM_SECURITY_OPTION
+            ):
+                result[index + 1] = resolved
+            index += 2
+            continue
+        if argument == f"--security-opt={CHROMIUM_SECURITY_OPTION}":
+            result[index] = f"--security-opt={resolved}"
+        index += 1
+    return result
+
+
+def validate_runtime_networks(runtime: list[str]) -> None:
+    networks = [
+        value
+        for option, value in runtime_options(runtime)
+        if option in {"--network", "--net"}
+    ]
+    if len(networks) > 1 and any(
+        loopback_tcp_port(value) is not None for value in networks
+    ):
+        reject(
+            "loopback TCP forwarding requires exactly one network option",
+            category=ViolationCategory.NETWORK,
+        )
 
 
 def build_run_create_command(argv: list[str], subcmd_index: int) -> list[str]:
@@ -306,15 +381,18 @@ def build_run_create_command(argv: list[str], subcmd_index: int) -> list[str]:
             category=ViolationCategory.UNSUPPORTED,
         )
 
+    validate_runtime_networks(runtime)
     validate_mount_layout(mounts)
     if not image_cmd:
         reject("missing container image", category=ViolationCategory.INPUT)
     validate_image_reference(image_cmd[0])
     protected_mounts = protected_mount_arguments(mounts)
+    safe = safe_args_for(runtime)
+    runtime = resolve_security_options(runtime)
     return (
         [REAL_PODMAN]
         + before
-        + safe_args_for(runtime)
+        + safe
         + runtime
         + protected_mounts
         + separator
