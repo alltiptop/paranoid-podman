@@ -70,6 +70,8 @@ class CheckWorkflowTests(unittest.TestCase):
             "bin/podman",
             "src/paranoid_podman/common/example.py",
             "tests/support/synthetic.txt",
+            "tests/fixtures/browser/Dockerfile",
+            "tests/fixtures/browser/smoke.mjs",
             ".github/workflows/ci.yml",
         }
         excluded = {

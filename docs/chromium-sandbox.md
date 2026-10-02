@@ -5,24 +5,28 @@ its browser sandbox enabled. Ordinary containers keep the existing policy.
 Arbitrary profile filenames, `seccomp=unconfined`, additional capabilities, and
 privileged containers remain denied.
 
+Build the repository's [minimal Chromium fixture](../tests/fixtures/chromium/README.md)
+first, then run its standalone example:
+
 ```sh
-docker run --rm --init --user pwuser \
+bin/podman run --rm --init --network=none --user pwuser \
   --security-opt seccomp=chromium \
   --shm-size=256m \
-  paranoid-podman-chromium-test:dev
+  localhost/paranoid-podman-chromium-test:dev
 ```
 
-Keep the service's existing port and environment arguments when running the
-preview server. Replace the project's `seccomp=./.../seccomp_profile.json`
-argument with the selector; do not supply both. The explicit runtime user is
-required even if the image already declares `USER pwuser`.
+The example renders inline HTML and prints a small result without writing files.
+Replace any project-supplied `seccomp=./.../seccomp_profile.json` argument with
+the selector; do not supply both. The explicit runtime user is required even
+if the image already declares `USER pwuser`.
 
 Compose uses the same selector:
 
 ```yaml
 services:
-  previews:
-    image: paranoid-podman-chromium-test:dev
+  browser:
+    image: localhost/paranoid-podman-chromium-test:dev
+    network_mode: none
     user: pwuser
     init: true
     security_opt:
@@ -37,6 +41,13 @@ request. The packaged profile is checked against a pinned SHA-256; missing,
 modified, or symlinked profile files fail before provider execution. Its
 directory belongs to the trusted guard installation, like the Python policy
 code itself, and must not be exposed as an untrusted writable host mount.
+
+## Access to a host-local test server
+
+Use the generic [host loopback option](host-loopback.md) to reach a deliberately
+selected host service. The `scripts/test.sh loopback` integration test creates
+its own temporary HTTP servers and uses this same fixture image; no application
+frontend, API, or fixed host port is required.
 
 ## Why this exception exists
 
@@ -79,13 +90,14 @@ restrictions must be reviewed and incorporated explicitly. The regression
 test fingerprints all non-`chroot` rules so an update cannot silently expand
 the exception.
 
-With an existing local image containing `pwuser` and `playwright-core`, run
-`scripts/test.sh chromium` (default image: `paranoid-podman-chromium-test:dev`; override with
+After building the [minimal Chromium fixture](../tests/fixtures/chromium/README.md),
+run `scripts/test.sh chromium` (default image:
+`localhost/paranoid-podman-chromium-test:dev`; override with
 `PARANOID_PODMAN_CHROMIUM_IMAGE`). This explicit integration test starts one
 temporary container through the source guard with no network, host mounts,
 or published ports. It checks zero capabilities, `no-new-privileges`, seccomp,
 Chromium's additional renderer filter and PID namespace, software WebGL2, and
-a PNG screenshot. It does not fetch an image or exercise the preview HTTP API.
+a PNG screenshot. It does not fetch an image or require an application service.
 
 References: [Chromium sandbox source](https://chromium.googlesource.com/chromium/src/+/lkgr/sandbox/linux/services/credentials.cc),
 [Linux user namespaces](https://man7.org/linux/man-pages/man7/user_namespaces.7.html),

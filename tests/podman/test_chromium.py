@@ -84,7 +84,10 @@ class ChromiumContainerTests(unittest.TestCase):
                 "--user=pwuser",
                 "--security-opt=seccomp=chromium",
                 "--shm-size=256m",
-                os.environ.get("PARANOID_PODMAN_CHROMIUM_IMAGE", "paranoid-podman-chromium-test:dev"),
+                os.environ.get(
+                    "PARANOID_PODMAN_CHROMIUM_IMAGE",
+                    "localhost/paranoid-podman-chromium-test:dev",
+                ),
                 "node",
                 "--input-type=module",
                 "-e",

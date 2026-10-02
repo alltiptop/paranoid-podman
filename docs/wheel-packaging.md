@@ -26,7 +26,7 @@ PATH="$PWD/.venv-build/bin:$PATH" scripts/build.sh
 ```
 
 Output: `dist/paranoid_podman-<version>-py3-none-any.whl` and `<wheel>.sha256`.
-The current `VERSION` value is `0.1.0`. Use
+The current `VERSION` value is `0.1.1`. Use
 `scripts/build.sh --outdir DIRECTORY` to change the output directory.
 Reproducible builds use pinned tools and `SOURCE_DATE_EPOCH` (default `315532800`).
 
@@ -48,7 +48,7 @@ Select the wheel just built. The filename below matches the current version;
 use the new filename if `VERSION` changes:
 
 ```bash
-pp_wheel="$PWD/dist/paranoid_podman-0.1.0-py3-none-any.whl"
+pp_wheel="$PWD/dist/paranoid_podman-0.1.1-py3-none-any.whl"
 read -r pp_sha256 _ < "$pp_wheel.sha256"
 cp "$pp_wheel" runtime-wheels/
 python3 -B scripts/wheelhouse_lock.py runtime-wheels

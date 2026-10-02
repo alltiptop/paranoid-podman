@@ -129,6 +129,13 @@ the fully reviewed non-interactive path used by automation such as DevPod. It
 uses unique resource names and removes only containers it created. Do not
 extend it with broad host mounts, personal paths, or shared resource names.
 
+Chromium and host-loopback integration tests use the repository's
+[minimal Chromium fixture](tests/fixtures/chromium/README.md). Build it explicitly
+before running `scripts/test.sh chromium` and `scripts/test.sh loopback`. The image
+has no application code; the tests supply their own HTML and temporary HTTP
+servers. Image building can download public dependencies, while the tests never
+build or pull images automatically.
+
 The opt-in SSH-agent test creates its own temporary identity and never reads
 normal user keys:
 

@@ -51,9 +51,10 @@ network access or replace the host service's authentication.
 
 ## Verification
 
-With an existing local image containing `pwuser`, Node.js, and `playwright-core`,
-run `scripts/test.sh loopback` (default image: `paranoid-podman-chromium-test:dev`; override
-with `PARANOID_PODMAN_CHROMIUM_IMAGE`). This explicit integration test starts two
+Build the [minimal Chromium fixture](../tests/fixtures/chromium/README.md), then
+run `scripts/test.sh loopback` (default image:
+`localhost/paranoid-podman-chromium-test:dev`; override with
+`PARANOID_PODMAN_CHROMIUM_IMAGE`). This explicit integration test starts two
 temporary host HTTP listeners on randomly assigned loopback ports and two
 temporary containers through the source guard. It compares default pasta with
 the explicit forward, verifies that the second host port stays unreachable and

@@ -115,7 +115,8 @@ class LoopbackContainerTests(unittest.TestCase):
                             "--shm-size=256m",
                             f"--network={network}",
                             os.environ.get(
-                                "PARANOID_PODMAN_CHROMIUM_IMAGE", "paranoid-podman-chromium-test:dev"
+                                "PARANOID_PODMAN_CHROMIUM_IMAGE",
+                                "localhost/paranoid-podman-chromium-test:dev",
                             ),
                             "node",
                             "--input-type=module",

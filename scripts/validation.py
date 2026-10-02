@@ -36,6 +36,7 @@ PUBLIC_SUFFIXES = {
     ".py",
     ".sh",
     ".md",
+    ".mjs",
     ".toml",
     ".txt",
     ".yaml",
@@ -101,6 +102,7 @@ def publishable_files(root: Path) -> list[Path]:
             path
             for path in tree_files(root / name)
             if path.suffix in PUBLIC_SUFFIXES
+            or path.name in {"Dockerfile", "Containerfile"}
             or (
                 path.parent == root / "bin"
                 and path.name in PYTHON_LAUNCHERS | BASH_LAUNCHERS
